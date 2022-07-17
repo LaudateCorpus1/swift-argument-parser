@@ -22,12 +22,13 @@ public protocol ParsableCommand: ParsableArguments {
   /// can pass through the wrapped type's name.
   static var _commandName: String { get }
   
-  /// Runs this command.
+  /// The behavior or functionality of this command.
   ///
-  /// After implementing this method, you can run your command-line
-  /// application by calling the static `main()` method on the root type.
-  /// This method has a default implementation that prints help text
-  /// for this command.
+  /// Implement this method in your `ParsableCommand`-conforming type with the
+  /// functionality that this command represents.
+  ///
+  /// This method has a default implementation that prints the help screen for
+  /// this command.
   mutating func run() throws
 }
 
@@ -79,11 +80,11 @@ extension ParsableCommand {
   ///     available.
   /// - Returns: The full help screen for this type.
   @_disfavoredOverload
-  @available(*, deprecated, message: "Use helpMessage(for:includeHidden:columns:) instead.")
+  @available(*, deprecated, renamed: "helpMessage(for:includeHidden:columns:)")
   public static func helpMessage(
     for subcommand: ParsableCommand.Type,
     columns: Int? = nil
-  ) -> String { 
+  ) -> String {
     helpMessage(for: subcommand, includeHidden: false, columns: columns)
   }
 
@@ -112,13 +113,24 @@ extension ParsableCommand {
         .rendered(screenWidth: columns)
   }
 
-  /// Parses an instance of this type, or one of its subcommands, from
-  /// the given arguments and calls its `run()` method, exiting with a
-  /// relevant error message if necessary.
+  /// Executes this command, or one of its subcommands, with the given
+  /// arguments.
+  ///
+  /// This method parses an instance of this type, one of its subcommands, or
+  /// another built-in `ParsableCommand` type, from command-line arguments,
+  /// and then calls its `run()` method, exiting with a relevant error message
+  /// if necessary.
   ///
   /// - Parameter arguments: An array of arguments to use for parsing. If
   ///   `arguments` is `nil`, this uses the program's command-line arguments.
   public static func main(_ arguments: [String]?) {
+    
+#if DEBUG
+    if #available(macOS 10.15, macCatalyst 13, iOS 13, tvOS 13, watchOS 6, *) {
+      checkAsyncHierarchy(self, root: "\(self)")
+    }
+#endif
+    
     do {
       var command = try parseAsRoot(arguments)
       try command.run()
@@ -127,9 +139,16 @@ extension ParsableCommand {
     }
   }
 
-  /// Parses an instance of this type, or one of its subcommands, from
-  /// command-line arguments and calls its `run()` method, exiting with a
-  /// relevant error message if necessary.
+  /// Executes this command, or one of its subcommands, with the program's
+  /// command-line arguments.
+  ///
+  /// Instead of calling this method directly, you can add `@main` to the root
+  /// command for your command-line tool.
+  ///
+  /// This method parses an instance of this type, one of its subcommands, or
+  /// another built-in `ParsableCommand` type, from command-line arguments,
+  /// and then calls its `run()` method, exiting with a relevant error message
+  /// if necessary.
   public static func main() {
     self.main(nil)
   }
@@ -152,4 +171,28 @@ extension ParsableCommand {
   internal static var defaultIncludesUnconditionalArguments: Bool {
     configuration.defaultSubcommand?.includesUnconditionalArguments == true
   }
+  
+#if DEBUG
+  @available(macOS 10.15, macCatalyst 13, iOS 13, tvOS 13, watchOS 6, *)
+  internal static func checkAsyncHierarchy(_ command: ParsableCommand.Type, root: String) {
+    for sub in command.configuration.subcommands {
+      checkAsyncHierarchy(sub, root: root)
+
+      guard sub.configuration.subcommands.isEmpty else { continue }
+      guard sub is AsyncParsableCommand.Type else { continue }
+
+      fatalError("""
+
+      --------------------------------------------------------------------
+      Asynchronous subcommand of a synchronous root.
+
+      The asynchronous command `\(sub)` is declared as a subcommand of the synchronous root command `\(root)`.
+
+      With this configuration, your asynchronous `run()` method will not be called. To fix this issue, change `\(root)`'s `ParsableCommand` conformance to `AsyncParsableCommand`.
+      --------------------------------------------------------------------
+
+      """.wrapped(to: 70))
+    }
+  }
+#endif
 }
